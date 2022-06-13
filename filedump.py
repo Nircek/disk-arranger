@@ -4,10 +4,11 @@ import time
 import hashlib
 import datetime
 import pathlib
+import argparse
 
 
 def human_size(size):
-    size_names = ("B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB")
+    size_names = ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB')
     size_map = ((1 << (i*10), e) for i, e in enumerate(size_names))
     r = f'{size} {size_names[0]}'
     for value, unit in size_map:
@@ -97,11 +98,17 @@ def trace(startpath):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('path', help='starting path', nargs='?', default='.')
+    parser.add_argument('-i', '--interval', type=float, default=5,
+                        help='interval between stats (in minutes)')
+    args = parser.parse_args()
+    STAT_INTERVAL = args.interval*60
     # dirty windows hack to get printing utf-8 to work
     sys.stdout = open(1, 'w', encoding='utf-8', closefd=False)
     START_TIME = time.time()
     print(f'[{isotime(START_TIME)}] start', file=sys.stderr)
-    trace('.' if len(sys.argv) < 2 else sys.argv[1])
+    trace(args.path)
     STOP_TIME = time.time()
     print(f'[{isotime(STOP_TIME)}] stop', file=sys.stderr)
     d = datetime.timedelta(seconds=STOP_TIME-START_TIME)

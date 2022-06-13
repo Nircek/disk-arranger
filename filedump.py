@@ -1,11 +1,11 @@
+import os
 import sys
 import hashlib
 import datetime
-import os
+import pathlib
 
-sys.stdout = open(1, 'w', encoding='utf-8', closefd=False)
 
-def sha256(path, BUF_SIZE = 4*1024*1024):
+def sha256(path, BUF_SIZE=4*1024*1024):
     sha256 = hashlib.sha256()
     try:
         with open(path, 'rb') as f:
@@ -20,24 +20,32 @@ def sha256(path, BUF_SIZE = 4*1024*1024):
         return 'failed'
     return sha256.hexdigest()
 
-def isotime(unix):
-    return datetime.datetime.fromtimestamp(unix, tz=datetime.timezone.utc).isoformat().replace('+00:00','Z')
 
-def props(path, size=None):
+def isotime(unix):
+    return (datetime.datetime.fromtimestamp(unix, tz=datetime.timezone.utc)
+            .isoformat()
+            .replace('+00:00', 'Z'))
+
+
+def props(path, dir=False):
     s = os.stat(path)
-    if size is None:
-        size = s.st_size
-    return [size] + list(map(isotime, [s.st_atime, s.st_mtime, s.st_ctime]))
+    sha, size = ('', 0) if dir else (sha256(path), s.st_size)
+    return ([sha, size]
+            + list(map(isotime, [s.st_atime, s.st_mtime, s.st_ctime])))
+
 
 def trace(startpath):
-    for root, dirs, files in os.walk(startpath):
-        print(root, '', *props(root, 0), sep='\t')
+    for root, _, files in os.walk(startpath):
+        print(root, *props(root, True), sep='\t')
         for f in files:
-            path = root+os.sep+f
+            path = pathlib.Path(root) / f
             if not os.path.isfile(path):
                 print(f'Ignoring {path}', file=sys.stderr)
                 continue
-            print(path, sha256(path), *props(path), sep='\t')
+            print(path, *props(path), sep='\t')
+
 
 if __name__ == '__main__':
+    # windows hack to get printing utf-8 to work
+    sys.stdout = open(1, 'w', encoding='utf-8', closefd=False)
     trace('.')

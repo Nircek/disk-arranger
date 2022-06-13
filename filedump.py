@@ -4,7 +4,6 @@ import time
 import hashlib
 import datetime
 import pathlib
-import math
 
 
 def human_size(size):
@@ -41,6 +40,15 @@ def isotime(unix):
             .replace('+00:00', 'Z'))
 
 
+def duration(stop=None, start=None):
+    global START_TIME
+    if stop is None:
+        stop = time.time()
+    if start is None:
+        start = START_TIME
+    return datetime.timedelta(seconds=(stop-start)//1)
+
+
 STAT_SIZE = 0
 STAT_COUNT = 0
 
@@ -61,7 +69,7 @@ STAT_INTERVAL = 5*60
 
 
 def log(path, props):
-    global LAST_STAT, LAST_STAT_C, LAST_STAT_S, STAT_INTERVAL
+    global START_TIME, LAST_STAT, LAST_STAT_C, LAST_STAT_S, STAT_INTERVAL
     if LAST_STAT is None:
         LAST_STAT = time.time()
     if time.time() - LAST_STAT >= STAT_INTERVAL:
@@ -70,6 +78,7 @@ def log(path, props):
         LAST_STAT_S, ns = STAT_SIZE, STAT_SIZE - LAST_STAT_S
         ns = human_size(ns)
         now, v = lambda: isotime(time.time()), {"file": sys.stderr}
+        print(f'[{now()}] {duration()}', **v)
         print(f'[{now()}] on {path}', **v)
         print(f'[{now()}] processed {STAT_COUNT:,} entities ({nc:,} new)', **v)
         print(f'[{now()}] and {human_size(STAT_SIZE)} of data ({ns} new)', **v)
@@ -90,8 +99,12 @@ def trace(startpath):
 if __name__ == '__main__':
     # dirty windows hack to get printing utf-8 to work
     sys.stdout = open(1, 'w', encoding='utf-8', closefd=False)
-    print(f'[{isotime(time.time())}] start', file=sys.stderr)
+    START_TIME = time.time()
+    print(f'[{isotime(START_TIME)}] start', file=sys.stderr)
     trace('.' if len(sys.argv) < 2 else sys.argv[1])
-    print(f'[{isotime(time.time())}] stop', file=sys.stderr)
+    STOP_TIME = time.time()
+    print(f'[{isotime(STOP_TIME)}] stop', file=sys.stderr)
+    d = datetime.timedelta(seconds=STOP_TIME-START_TIME)
+    print(f'[{isotime(time.time())}] {d}', file=sys.stderr)
     print(f'processed {STAT_COUNT:,} entities', file=sys.stderr)
     print(f'and {human_size(STAT_SIZE)} of data', file=sys.stderr)

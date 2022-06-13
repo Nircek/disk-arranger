@@ -18,53 +18,84 @@
 
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-import functools
+import sys
 import math
+import re
+import functools
 from filedump import human_size
+
+SEP_RE = re.compile(r'[/\\]')
+
+
+def splitParent(path):
+    sep = SEP_RE.search(path)
+    if sep is None:
+        return '', path, ''
+    sep = sep.group()
+    s = path.rsplit(sep, 1)
+    return s[0]+sep, s[1], sep
 
 
 def getData(filename):
-    data = {}
+    db = {}
+    graph = {}
     with open(filename, 'r') as file:
         try:
             for line in file:
                 path, sha, size, atime, mtime, ctime = line.split('\t')
                 size, ctime = int(size), ctime.strip()
-                if (size, sha) not in data:
-                    data[(size, sha)] = []
-                data[(size, sha)] += [(path, atime, mtime, ctime)]
+                parent, child, sep = splitParent(path)
+                if parent not in graph:
+                    graph[parent] = []
+                graph[parent] += [(child+('' if sha else sep), sha)]
+                if sha not in db:
+                    db[sha] = {}
+                if (db[sha][''] if '' in db[sha] else size) != size:
+                    print(f'{sha} {size} {sha[path]}', file=sys.stderr)
+                db[sha][''] = size
+                db[sha][path] = (atime, mtime, ctime)
         except ValueError:
             print(f'Ignoring {repr(line)}')
+    return db, graph
 
+
+def getSortedDups(db):
     return sorted(filter(
-        lambda x: len(x[1]) > 1,
-        data.items()),
-        key=lambda e: (-e[0][0]*(len(e[1])-1), e[0][1]))
+        lambda x: len(x[1]) > 1+1,
+        db.items()),
+        key=lambda e: (-e[1]['']*(len(e[1])-1-1), e[0]))
 
 
-def wasted(data):
-    def s(e): return e[0][0]*(len(e[1])-1)
+def wasted(dups):
+    # total size = size * quantity
+    def s(e): return e[1]['']*(len(e[1])-2)
+    # func -- reduce total sizes with fn
     def f(s): return lambda o, e: o+s(e)
-    def p(s): return human_size(functools.reduce(f(s), data, 0))
+    # prettify reduced with fn
+    def p(s): return human_size(functools.reduce(f(s), dups, 0))
+    # ceil sizes to cluster size
     def c(b): return lambda x: math.ceil(s(x)/b)*b
     return p(s), p(c(4*1 << 10))
 
 
-def best(data, n=10):
+def best(dups, n=10):
     r = []
-    for key, value in data[:n]:
-        size = human_size(key[0])
-        if len(value) > 2:
-            q = len(value)-1
-            total = human_size(q*key[0])
+    for key, value in dups[:n]:
+        size = human_size(value[''])
+        if len(value) > 2+1:
+            q = len(value)-1-1
+            total = human_size(q*value[''])
             size = f'{total} = {q}*{size}'
-        r += [(size, key[1], str(list(map(lambda x: x[0], value))))]
+        filenames = list(value.keys())
+        filenames.remove('')
+        r += [(size, key, str(filenames))]
     return r
 
 
 if __name__ == "__main__":
-    data = getData('filedump.txt')
-    print((lambda x: f'{x[0]} / {x[1]}')(wasted(data)), 'wasted')
+    db, graph = getData('filedump.txt')
+    dups = getSortedDups(db)
+    print((lambda x: f'{x[0]} / {x[1]}')(wasted(dups)), 'wasted')
     print()
     print('Best 10 entries:')
-    print(*['\t'.join(e) for e in best(data)], sep='\n')
+    print(*['\t'.join(e) for e in best(dups)], sep='\n')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# filedump.py
+# filedump.py -- part of disk-arranger
 # Copyright (C) 2022 Marcin Zepp <nircek-2103@protonmail.com>
 
 # This program is free software: you can redistribute it and/or modify

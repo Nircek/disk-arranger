@@ -22,6 +22,7 @@ import sys
 import math
 import re
 import functools
+import readline
 from filedump import human_size
 
 SEP_RE = re.compile(r'[/\\]')
@@ -43,6 +44,7 @@ def getData(filename):
         try:
             for line in file:
                 path, sha, size, atime, mtime, ctime = line.split('\t')
+                path = escape(path)
                 size, ctime = int(size), ctime.strip()
                 parent, child, sep = splitParent(path)
                 if parent not in graph:
@@ -56,6 +58,11 @@ def getData(filename):
                 db[sha][path] = (atime, mtime, ctime)
         except ValueError:
             print(f'Ignoring {repr(line)}')
+    graph[''].remove(('.', ''))
+    for e in ['./', '.\\']:
+        if e in graph:
+            graph[''] += [(e, '')]
+    print(graph[''])
     return db, graph
 
 
@@ -92,6 +99,25 @@ def best(dups, n=10):
     return r
 
 
+def escape(t): return t.replace('^', '^^').replace(' ', '^s')
+
+
+CARET_SPACE_RE = re.compile(r'(?<!\^)((\^\^)*)\^s')
+
+
+def unescape(t): return CARET_SPACE_RE.sub(r'\1 ', t).replace('^^', '^')
+
+
+def completer(text, state):
+    parent, child, sep = splitParent(text)
+    if parent not in graph:
+        return None
+    l = [parent+e for e, _ in graph[parent] if e.startswith(child)] + [None]
+    if len(l) == 2 and l[0][-1] not in '\\/':
+        l[0] += ' '
+    return l[state]
+
+
 if __name__ == "__main__":
     db, graph = getData('filedump.txt')
     dups = getSortedDups(db)
@@ -99,3 +125,11 @@ if __name__ == "__main__":
     print()
     print('Best 10 entries:')
     print(*['\t'.join(e) for e in best(dups)], sep='\n')
+    readline.set_completer(completer)
+    readline.set_completer_delims(' ')
+    readline.parse_and_bind('tab: complete')
+    while True:
+        try:
+            input()
+        except EOFError:
+            break

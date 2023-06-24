@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # analyze.py -- part of disk-arranger
-# Copyright (C) 2022 Marcin Zepp <nircek-2103@protonmail.com>
+# Copyright (C) 2022-2023 Marcin Zepp <nircek-2103@protonmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -23,8 +23,19 @@ import math
 import re
 import functools
 import readline
-from filedump import human_size
 
+def human_size(size):
+    size_names = ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB')
+    size_map = ((1 << (i*10), e) for i, e in enumerate(size_names))
+    r = f'{size} {size_names[0]}'
+    for value, unit in size_map:
+        if size < value:
+            break
+        q = size / value
+        r = f'{q:.4g} {unit}'
+    return r
+
+# it only supports Windows separators now :(
 SEP_RE = re.compile(r'[/\\]')
 
 
@@ -85,17 +96,21 @@ def wasted(dups):
     return p(s), p(c(4*1 << 10))
 
 
-def best(dups, n=10):
+def best(dups):
     r = []
-    for key, value in dups[:n]:
-        size = human_size(value[''])
+    for key, value in dups:
+        adding = value['']
+        size = human_size(adding)
         if len(value) > 2+1:
             q = len(value)-1-1
-            total = human_size(q*value[''])
+            adding = q * value['']
+            total = human_size(adding)
             size = f'{total} = {q}*{size}'
+        if adding < 2*1 << 20:
+            break
         filenames = list(value.keys())
         filenames.remove('')
-        r += [(size, key, str(filenames))]
+        r += [(size, key, filenames)]
     return r
 
 
@@ -105,7 +120,7 @@ def escape(t): return t.replace('^', '^^').replace(' ', '^s')
 CARET_SPACE_RE = re.compile(r'(?<!\^)((\^\^)*)\^s')
 
 
-def unescape(t): return CARET_SPACE_RE.sub(r'\1 ', t).replace('^^', '^')
+def unescape(t): return '"' + CARET_SPACE_RE.sub(r'\1 ', t).replace('^^', '^') + '"'
 
 
 def completer(text, state):
@@ -119,16 +134,31 @@ def completer(text, state):
 
 
 if __name__ == "__main__":
-    db, graph = getData('filedump.txt')
+    db, graph = getData('filedump')
     dups = getSortedDups(db)
     print((lambda x: f'{x[0]} / {x[1]}')(wasted(dups)), 'wasted')
     print()
-    print('Best 10 entries:')
-    print(*['\t'.join(e) for e in best(dups)], sep='\n')
+    x = best(dups)
+    X = [tuple(sorted([e.rsplit('\\', 1)[0] for e in files])) for _, _, files in x]
+    from collections import Counter
+    X = Counter(X)
+    X = sorted([(-c, k) for k, c in filter(lambda e: e[1] > 1, X.items())])
+    print(f'Duplicate dirs [list of {len(X)} dirs containing {sum(map(lambda e: -e[0], X))} dups]]:')
+    for mc, k in X:
+        k = ' '.join([unescape(e) for e in k])
+        print(f'{-mc}: {k}')
+    print(37*'\n')
+    already = set([e[1] for e in X])
+    x = list(filter(lambda el: tuple(sorted([e.rsplit('\\', 1)[0] for e in el[2]])) not in already, x))
+    print(f'Entries saving ≥ 2 MiB [list of {len(x)}]:')
+    for s, k, f in x:
+        f = [unescape(e) for e in f]
+        print(s, k, ' '.join(f), sep='\t')
     readline.set_completer(completer)
     readline.set_completer_delims(' ')
     readline.parse_and_bind('tab: complete')
     while True:
+        break
         try:
             input()
         except EOFError:

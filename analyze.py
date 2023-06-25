@@ -22,7 +22,7 @@ import sys
 import math
 import re
 import functools
-import readline
+# import readline
 
 def human_size(size):
     size_names = ('B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB')
@@ -54,22 +54,26 @@ def getData(filename):
     with open(filename, 'r') as file:
         try:
             for line in file:
-                path, sha, size, atime, mtime, ctime = line.split('\t')
+                path, sha, size, atime, mtime, ctime = line.rstrip().split('\t')
                 path = escape(path)
-                size, ctime = int(size), ctime.strip()
+                size, ctime = int(size), ctime
                 parent, child, sep = splitParent(path)
+                if sha == 'failed':
+                    print(f'{sha=} {path=} {size=} {atime=} {mtime=} {ctime=}', file=sys.stderr)
+                    continue
                 if parent not in graph:
                     graph[parent] = []
                 graph[parent] += [(child+('' if sha else sep), sha)]
                 if sha not in db:
                     db[sha] = {}
-                if (db[sha][''] if '' in db[sha] else size) != size:
-                    print(f'{sha} {size} {sha[path]}', file=sys.stderr)
+                if '' in db[sha] and db[sha][''] != size:
+                    print(f'{sha} sizes differ: {size} != {db[sha][""]}', file=sys.stderr)
                 db[sha][''] = size
                 db[sha][path] = (atime, mtime, ctime)
         except ValueError:
             print(f'Ignoring {repr(line)}')
-    graph[''].remove(('.', ''))
+    if ('.', '') in graph['']:
+        graph[''].remove(('.', ''))
     for e in ['./', '.\\']:
         if e in graph:
             graph[''] += [(e, '')]
@@ -154,12 +158,11 @@ if __name__ == "__main__":
     for s, k, f in x:
         f = [unescape(e) for e in f]
         print(s, k, ' '.join(f), sep='\t')
-    readline.set_completer(completer)
-    readline.set_completer_delims(' ')
-    readline.parse_and_bind('tab: complete')
-    while True:
-        break
-        try:
-            input()
-        except EOFError:
-            break
+    # readline.set_completer(completer)
+    # readline.set_completer_delims(' ')
+    # readline.parse_and_bind('tab: complete')
+    # while True:
+    #     try:
+    #         input()
+    #     except EOFError:
+    #         break

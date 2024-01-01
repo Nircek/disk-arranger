@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # filedump.py -- part of disk-arranger
-# Copyright (C) 2022 Marcin Zepp <nircek-2103@protonmail.com>
+# Copyright (C) 2022, 2024 Marcin Zepp <nircek-2103@protonmail.com>
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -21,6 +21,7 @@
 import os
 import sys
 import time
+import platform
 import hashlib
 import datetime
 import pathlib
@@ -42,12 +43,14 @@ def human_size(size):
 def sha256(path, BUF_SIZE=4*1024*1024):
     sha256 = hashlib.sha256()
     try:
+        st = os.stat(path)
         with open(path, 'rb') as f:
             while True:
                 data = f.read(BUF_SIZE)
                 if not data:
                     break
                 sha256.update(data)
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
     except Exception as e:
         print(f'Failed {path}', file=sys.stderr)
         print(e, file=sys.stderr)
@@ -69,6 +72,14 @@ def duration(stop=None, start=None):
         start = START_TIME
     return datetime.timedelta(seconds=(stop-start)//1)
 
+def creation_date(st):
+    if platform.system() == 'Windows':
+        return st.st_ctime
+    else:
+        try:
+            return st.st_birthtime
+        except AttributeError:
+            return None
 
 STAT_SIZE = 0
 STAT_COUNT = 0
@@ -80,8 +91,8 @@ def props(path, dir=False):
     sha, size = ('', 0) if dir else (sha256(path), s.st_size)
     STAT_SIZE += size
     STAT_COUNT += 1
-    return ([sha, size]
-            + list(map(isotime, [s.st_atime, s.st_mtime, s.st_ctime])))
+    ctime = creation_date(s)
+    return [sha, size, *map(isotime, [s.st_atime, s.st_mtime, *([ctime] if ctime is not None else [])])]
 
 
 LAST_STAT = None

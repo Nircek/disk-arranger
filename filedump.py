@@ -50,7 +50,11 @@ def sha256(path, BUF_SIZE=4*1024*1024):
                 if not data:
                     break
                 sha256.update(data)
-        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+        if os.stat(path).st_atime_ns != st.st_atime_ns:  # read-only filesystems
+            try:
+                os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            except Exception as e:
+                print(f"Cannot change `atime` {e}: {path}; {st} != {os.stat(path)}", file=sys.stderr)
     except Exception as e:
         print(f'Failed {path}', file=sys.stderr)
         print(e, file=sys.stderr)

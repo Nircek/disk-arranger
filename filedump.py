@@ -78,7 +78,7 @@ def duration(stop=None, start=None):
 
 def creation_date(st):
     if platform.system() == 'Windows':
-        return st.st_ctime
+        return st.st_ctime  # it should test filesystem type, not the OS
     else:
         try:
             return st.st_birthtime

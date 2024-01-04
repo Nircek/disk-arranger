@@ -23,8 +23,24 @@ import re
 from collections import Counter
 from typing import Optional
 from dataclasses import dataclass
+from os.path import commonprefix
 
 # import readline
+
+
+def commonsuffixpath(words: list[str]) -> int:
+    r"""
+    >>> paths = [".\\c\\.git\\objects\\00\\", ".\\projects-c\\.git\\objects\\00\\"]
+    >>> suffix = '.git\\objects\\00\\'
+    >>> commonsuffixpath(paths) == len(suffix)
+    True
+    >>> commonsuffixpath(['/photos/', '/photos/']) == len('photos/')
+    True
+    >>> commonsuffixpath(['.\\b\\', '.\\a\\'])
+    0
+    """
+    words = [re.sub(r"[/\\]", "/", w)[::-1] for w in words]
+    return len(commonprefix(words).rsplit("/", 1)[0])
 
 
 def human_size(size: int):
@@ -62,6 +78,8 @@ def human_size(size: int):
 
 def split_path(path: str) -> tuple[str, str, str]:
     "Split a filepath into parent path, filename and separator."
+    if path and path[-1] in "/\\":
+        path = path[:-1]
     matched_separator = re.search(r"[/\\]", path)
     if matched_separator is None:
         return "", path, ""
@@ -71,6 +89,10 @@ def split_path(path: str) -> tuple[str, str, str]:
 
 
 def get_path_parent(path: str):
+    r"""
+    >>> get_path_parent(".\\a\\")
+    '.\\'
+    """
     return split_path(path)[0]
 
 
@@ -203,18 +225,23 @@ class FileDump:
         return r
 
     def get_dup_paths(self):
-        # TODO: add suffix recognition
         if self.dup_paths is None:
             dups = [sfh.paths.keys() for _, sfh in self.dups]
-            parent_paths = [
-                tuple(sorted([get_path_parent(p) for p in paths])) for paths in dups
-            ]
+
+            def find_not_common_dir_tuple(paths):
+                paths = [get_path_parent(p) for p in paths]
+                opaths = list(paths)
+                suffix = commonsuffixpath(paths)
+                paths = [p if suffix in (0, len(p)) else p[:-suffix] for p in paths]
+                if len(re.findall(r"[/\\]", paths[0])) <= 1:
+                    paths = opaths
+                return tuple(sorted(paths))
+
+            parent_paths = [find_not_common_dir_tuple(paths) for paths in dups]
             counted_dir_tuples = Counter(parent_paths).items()
             counted_dir_tuples = filter(lambda e: e[1] > 1, counted_dir_tuples)
 
-            counted_dir_tuples = sorted(
-                counted_dir_tuples, key=lambda e: e[1], reverse=True
-            )
+            counted_dir_tuples = sorted(counted_dir_tuples, key=lambda e: (-e[1], e[0]))
             self.dup_paths = counted_dir_tuples
         return self.dup_paths
 
@@ -231,10 +258,17 @@ class FileDump:
             print(f"{cnt}: {dir_tuple}")
         print(37 * "\n")
         already = {f for e in self.dup_paths for f in e[0]}
+
+        def is_already(p):
+            p = get_path_parent(p)
+            if not p:
+                return False
+            return True if p in already else is_already(p)
+
         x = list(
             filter(
                 lambda el: el[0] > 2 * 1024**2
-                and not all([get_path_parent(e) in already for e in el[3]]),
+                and not all([is_already(e) for e in el[3]]),
                 self.best(),
             )
         )

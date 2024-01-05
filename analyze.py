@@ -21,7 +21,7 @@
 import sys
 import re
 from collections import Counter
-from typing import Optional
+from collections.abc import Iterable
 from dataclasses import dataclass
 from os.path import commonprefix
 
@@ -43,7 +43,7 @@ def commonsuffixpath(words: list[str]) -> int:
     return len(commonprefix(words).rsplit("/", 1)[0])
 
 
-def human_size(size: int):
+def human_size(size: int) -> str:
     """Change `size` in bytes to human format.
     >>> human_size(0)
     '0 B'
@@ -77,18 +77,18 @@ def human_size(size: int):
 
 
 def split_path(path: str) -> tuple[str, str, str]:
-    "Split a filepath into parent path, filename and separator."
+    """Split a filepath into parent path, filename and separator."""
     if path and path[-1] in "/\\":
         path = path[:-1]
-    matched_separator = re.search(r"[/\\]", path)
-    if matched_separator is None:
+    match = re.search(r"[/\\]", path)
+    if match is None:
         return "", path, ""
-    matched_separator = matched_separator.group()
+    matched_separator = match.group()
     splitted = path.rsplit(matched_separator, 1)
     return splitted[0] + matched_separator, splitted[1], matched_separator
 
 
-def get_path_parent(path: str):
+def get_path_parent(path: str) -> str:
     r"""
     >>> get_path_parent(".\\a\\")
     '.\\'
@@ -98,13 +98,11 @@ def get_path_parent(path: str):
 
 @dataclass
 class FileInfo:
-    """
-    The holder of timestamps associated with path.
-    """
+    """The holder of timestamps associated with path."""
 
     atime: str
     mtime: str
-    ctime: Optional[str]
+    ctime: str | None
 
 
 @dataclass
@@ -115,13 +113,13 @@ class SameFileHolder:
     paths: dict[str, FileInfo]
     "Path -> PathInfo"
 
-    def wasting_space(self, cluster_size=1):
+    def wasting_space(self, cluster_size: int = 1) -> int:
         """Calculate space wasting by duplicates of this file."""
         cluster_sized = (self.size + cluster_size - 1) // cluster_size * cluster_size
         return cluster_sized * (len(self.paths) - 1)
 
 
-def elementwise_tuple_sum(l: list[tuple[int, int]]):
+def elementwise_tuple_sum(l: Iterable[tuple[int, ...]]) -> tuple[int, ...] | None:
     """
     >>> elementwise_tuple_sum([(1, 2), (3, 4), (5, 6)])
     (9, 12)
@@ -135,15 +133,15 @@ class FileDump:
 
     def __init__(self, filename: str):
         self.db: dict[str, SameFileHolder] = {}
-        self.graph = {}
-        self.dups: list[tuple[str, SameFileHolder]] = None
-        self.dup_paths = None
+        self.graph: dict[str, list[tuple[str, str]]] = {}
+        self.dups: list[tuple[str, SameFileHolder]] = []
+        self.dup_paths: list[tuple[tuple[str, ...], int]] = []
         with open(filename, "r", encoding="utf8") as file:
             try:
                 for line in file:
-                    path, sha, size, atime, mtime, *ctime = line.rstrip().split("\t")
+                    path, sha, _size, atime, mtime, *_ctime = line.rstrip().split("\t")
                     path = escape(path)
-                    size, ctime = int(size), ctime[0] if ctime else None
+                    size, ctime = int(_size), _ctime[0] if _ctime else None
                     parent, child, sep = split_path(path)
                     if sha == "failed":
                         print(
@@ -174,8 +172,8 @@ class FileDump:
                 self.graph[""] += [(e, "")]
         print(self.graph[""])
 
-    def get_sorted_dups(self):
-        "Get files wasting space in descending order."
+    def get_sorted_dups(self) -> list[tuple[str, SameFileHolder]]:
+        """Get files wasting space in descending order."""
         if self.dups is None:
 
             def is_not_unique(sha_sfh: tuple[str, SameFileHolder]):
@@ -192,23 +190,24 @@ class FileDump:
 
         return self.dups
 
-    def get_wasted_space(self, cluster_sizes=(1, 4096)) -> tuple[int, ...]:
-        """
-        Get size of space wasted by duplicates stored on disk with given cluster size.
-        """
+    def get_wasted_space(
+        self, cluster_sizes: tuple[int, ...] = (1, 4096)
+    ) -> tuple[int, ...]:
+        """Get size of space wasted by duplicates stored on disk with given cluster size."""
         self.get_sorted_dups()  # make sure self.dups is initiated
 
-        def get_dups_info(sfh: SameFileHolder):
-            return (sfh.wasting_space(c) for c in cluster_sizes)
+        def get_dups_info(sfh: SameFileHolder) -> tuple[int, ...]:
+            return tuple((sfh.wasting_space(c) for c in cluster_sizes))
 
         r = elementwise_tuple_sum([get_dups_info(sfh) for _, sfh in self.dups])
         return r if r else (0, 0)
 
-    def best(self) -> list[tuple[str, str, list[str]]]:
-        """Get list of best duplicates to resolve.
+    def best(self) -> list[tuple[int, str, str, list[str]]]:
+        """
+        Get list of best duplicates to resolve.
 
         Returns:
-            list[tuple[str, str, list[str]]]: (size, human_size, sha, paths))
+            list[int, tuple[str, str, list[str]]]: (size, human_size, sha, paths))
         """
         r = []
         self.get_sorted_dups()  # make sure self.dups is initiated
@@ -224,11 +223,17 @@ class FileDump:
             r += [(wasted, size, sha, paths)]
         return r
 
-    def get_dup_paths(self):
+    def get_dup_paths(self) -> list[tuple[tuple[str, ...], int]]:
+        """
+        Calculate paths with a lot of same duplicates.
+
+        Rationale:
+            Compress `a/{a,b,...}` and `b/{a,b,...}` into just `a` and `b`.
+        """
         if self.dup_paths is None:
             dups = [sfh.paths.keys() for _, sfh in self.dups]
 
-            def find_not_common_dir_tuple(paths):
+            def find_not_common_dir_tuple(paths: Iterable[str]) -> tuple[str, ...]:
                 paths = [get_path_parent(p) for p in paths]
                 opaths = list(paths)
                 suffix = commonsuffixpath(paths)
@@ -238,14 +243,14 @@ class FileDump:
                 return tuple(sorted(paths))
 
             parent_paths = [find_not_common_dir_tuple(paths) for paths in dups]
-            counted_dir_tuples = Counter(parent_paths).items()
-            counted_dir_tuples = filter(lambda e: e[1] > 1, counted_dir_tuples)
+            _counted_dir_tuples = Counter(parent_paths).items()
+            counted_dir_tuples = sorted(filter(lambda e: e[1] > 1, _counted_dir_tuples))
 
-            counted_dir_tuples = sorted(counted_dir_tuples, key=lambda e: (-e[1], e[0]))
             self.dup_paths = counted_dir_tuples
         return self.dup_paths
 
-    def print_info(self):
+    def print_info(self) -> None:
+        """Print basic info about FileDump."""
         c1, c4k = map(human_size, self.get_wasted_space())
         print(f"{c1} / {c4k} wasted\n")
 
@@ -253,13 +258,13 @@ class FileDump:
         dirs = len(self.dup_paths)
         dirdups = sum(map(lambda e: e[1], self.dup_paths))
         print(f"Duplicate dirs [list of {dirs} dirs containing {dirdups} dups]:")
-        for dir_tuple, cnt in self.dup_paths:
-            dir_tuple = " ".join([unescape(e) for e in dir_tuple])
+        for _dir_tuple, cnt in self.dup_paths:
+            dir_tuple = " ".join([unescape(e) for e in _dir_tuple])
             print(f"{cnt}: {dir_tuple}")
         print(37 * "\n")
         already = {f for e in self.dup_paths for f in e[0]}
 
-        def is_already(p):
+        def is_already(p: str) -> bool:
             p = get_path_parent(p)
             if not p:
                 return False
@@ -273,12 +278,12 @@ class FileDump:
             )
         )
         print(f"Entries saving ≥ 2 MiB [list of {len(x)}]:")
-        for s, hs, k, f in x:
+        for _s, hs, k, f in x:
             f = [unescape(e) for e in f]
             print(hs, k, " ".join(f), sep="\t")
 
 
-def escape(t):
+def escape(t: str) -> str:
     """
     >>> escape('Lorem ipsum dolor sit amet.')
     'Lorem^sipsum^sdolor^ssit^samet.'
@@ -288,7 +293,7 @@ def escape(t):
     return t.replace("^", "^^").replace(" ", "^s")
 
 
-def unescape(t):
+def unescape(t: str) -> str:
     """
     >>> unescape('Lorem^sipsum^sdolor^ssit^samet.')
     '"Lorem ipsum dolor sit amet."'

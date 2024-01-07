@@ -139,7 +139,10 @@ class LoggingUtility:
     def print_stop(self) -> None:
         """Log the end time and final stats."""
         d = timedelta(seconds=time() - self.start_time)
-        msg = f"stop\n{d}\nprocessed {self.stat_count:,} entities\nand {human_size(self.stat_size)} of data"
+        msg = (
+            f"stop\n{d}\nprocessed {self.stat_count:,} entities"
+            f"\nand {human_size(self.stat_size)} of data"
+        )
         self.error_print(msg)
 
 

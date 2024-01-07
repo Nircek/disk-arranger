@@ -21,11 +21,10 @@
 import sys
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Collection
 from dataclasses import dataclass
 from os.path import commonprefix
-
-# import readline
+import readline
 
 
 def commonsuffixpath(words: list[str]) -> int:
@@ -77,7 +76,19 @@ def human_size(size: int) -> str:
 
 
 def split_path(path: str) -> tuple[str, str, str]:
-    """Split a filepath into parent path, filename and separator."""
+    """
+    Split a filepath into parent path, filename and separator.
+    >>> split_path("./")
+    ('', '.', '')
+    >>> split_path("./a")
+    ('./', 'a', '/')
+    >>> split_path("./a/")
+    ('./', 'a', '/')
+    >>> split_path("./a/b")
+    ('./a/', 'b', '/')
+    >>> split_path("./a/b/.")
+    ('./a/b/', '.', '/')
+    """
     if path and path[-1] in "/\\":
         path = path[:-1]
     match = re.search(r"[/\\]", path)
@@ -131,40 +142,31 @@ def elementwise_tuple_sum(l: Iterable[tuple[int, ...]]) -> tuple[int, ...] | Non
 class FileDump:
     """The presentation of filedump file."""
 
-    def __init__(self, filename: str):
+    def __init__(self) -> None:
         self.db: dict[str, SameFileHolder] = {}
+        """Mapping of SHA to information about same file."""
         self.graph: dict[str, list[tuple[str, str]]] = {}
+        """Mapping of folder path to content (filename, sha)"""
         self.dups: list[tuple[str, SameFileHolder]] = []
-        self.dup_paths: list[tuple[tuple[str, ...], int]] = []
+        """List of (sha, info) about duplicated files."""
+        self.dup_paths: Collection[tuple[tuple[str, ...], int]] = []
+        """List of (paths, file_count) about duplicated paths."""
+        self.completer_cache: dict[str, list[str]] = {}
+        """Cache of complter output: prompt to suggested paths."""
+
+    def load_file(self, filename: str) -> None:
+        """Loads paths from FileDump file."""
         with open(filename, "r", encoding="utf8") as file:
             try:
                 for line in file:
-                    path, sha, _size, atime, mtime, *_ctime = line.rstrip().split("\t")
+                    path, sha, ssize, atime, mtime, *lctime = line.rstrip().split("\t")
                     path = escape(path)
-                    size, ctime = int(_size), _ctime[0] if _ctime else None
-                    parent, child, sep = split_path(path)
-                    if sha == "failed":
-                        print(
-                            f"{sha=} {path=} {size=} {atime=} {mtime=} {ctime=}",
-                            file=sys.stderr,
-                        )
-                        continue
-                    if parent not in self.graph:
-                        self.graph[parent] = []
-                    self.graph[parent] += [(child + ("" if sha else sep), sha)]
-                    pathinfo = FileInfo(atime, mtime, ctime)
-                    if sha not in self.db:
-                        self.db[sha] = SameFileHolder(size, {path: pathinfo})
-                    else:
-                        self.db[sha].paths[path] = pathinfo
-                        stored_size = self.db[sha].size
-                        if stored_size != size:
-                            print(
-                                f"{sha} sizes differ: {size} != {stored_size}",
-                                file=sys.stderr,
-                            )
+                    size = int(ssize)
+                    ctime = lctime[0] if lctime else None
+                    self.add_path(path, sha, size, FileInfo(atime, mtime, ctime))
             except ValueError:
                 print(f"Ignoring {repr(line)}")
+
         if (".", "") in self.graph[""]:
             self.graph[""].remove((".", ""))
         for e in ["./", ".\\"]:
@@ -172,21 +174,61 @@ class FileDump:
                 self.graph[""] += [(e, "")]
         print(self.graph[""])
 
-    def get_sorted_dups(self) -> list[tuple[str, SameFileHolder]]:
-        """Get files wasting space in descending order."""
-        if self.dups is None:
+    def print_db(self) -> None:
+        """
+        >>> fd = FileDump()
+        >>> t, s1, s2 = "2023-12-31T23:00:00Z", "0"*64, "0"*63+"1"
+        >>> fd.add_path("./xd", s1, 3, FileInfo(t, t, None))
+        >>> fd.add_path("./xd2", s2, 5, FileInfo(t, t, None))
+        >>> fd.add_path("./xd3", s2, 5, FileInfo(t, t, None))
+        >>> fd.print_db()
+        0000000000000000000000000000000000000000000000000000000000000000 1 ./xd
+        0000000000000000000000000000000000000000000000000000000000000001 2 ./xd2
+        """
+        for k, v in self.db.items():
+            for p in v.paths:
+                path = p
+                break
+            print(k, len(v.paths), path)
 
-            def is_not_unique(sha_sfh: tuple[str, SameFileHolder]):
+    def add_path(self, path: str, sha: str, size: int, timeinfo: FileInfo) -> None:
+        """Add new file to inner state."""
+        parent, child, sep = split_path(path)
+        if sha == "failed":
+            print(
+                f"{sha=} {path=} {size=} {timeinfo}",
+                file=sys.stderr,
+            )
+            return
+        if parent not in self.graph:
+            self.graph[parent] = []
+        self.graph[parent] += [(child + ("" if sha else sep), sha)]
+        if sha not in self.db:
+            self.db[sha] = SameFileHolder(size, {path: timeinfo})
+        else:
+            self.db[sha].paths[path] = timeinfo
+            stored_size = self.db[sha].size
+            if stored_size != size:
+                print(
+                    f"{sha} sizes differ: {size} != {stored_size}",
+                    file=sys.stderr,
+                )
+
+    def get_sorted_dups(self, force: bool = False) -> list[tuple[str, SameFileHolder]]:
+        """Get files wasting space in descending order."""
+        if force or not self.dups:
+
+            def is_not_unique(sha_sfh: tuple[str, SameFileHolder]) -> bool:
                 _, sfh = sha_sfh
                 return len(sfh.paths) >= 2
 
             dups = filter(is_not_unique, self.db.items())
 
-            def wasting_space(sha_sfh: tuple[str, SameFileHolder]):
+            def wasting_space(sha_sfh: tuple[str, SameFileHolder]) -> int:
                 _, sfh = sha_sfh
                 return sfh.wasting_space()
 
-            self.dups = list(sorted(dups, key=wasting_space, reverse=True))
+            self.dups = sorted(dups, key=wasting_space, reverse=True)
 
         return self.dups
 
@@ -223,14 +265,16 @@ class FileDump:
             r += [(wasted, size, sha, paths)]
         return r
 
-    def get_dup_paths(self) -> list[tuple[tuple[str, ...], int]]:
+    def get_dup_paths(
+        self, force: bool = False
+    ) -> Collection[tuple[tuple[str, ...], int]]:
         """
         Calculate paths with a lot of same duplicates.
 
         Rationale:
             Compress `a/{a,b,...}` and `b/{a,b,...}` into just `a` and `b`.
         """
-        if self.dup_paths is None:
+        if force or not self.dup_paths:
             dups = [sfh.paths.keys() for _, sfh in self.dups]
 
             def find_not_common_dir_tuple(paths: Iterable[str]) -> tuple[str, ...]:
@@ -243,10 +287,8 @@ class FileDump:
                 return tuple(sorted(paths))
 
             parent_paths = [find_not_common_dir_tuple(paths) for paths in dups]
-            _counted_dir_tuples = Counter(parent_paths).items()
-            counted_dir_tuples = sorted(filter(lambda e: e[1] > 1, _counted_dir_tuples))
-
-            self.dup_paths = counted_dir_tuples
+            self.dup_paths = Counter(parent_paths).items()
+            self.dup_paths = sorted(filter(lambda e: e[1] > 1, self.dup_paths))
         return self.dup_paths
 
     def print_info(self) -> None:
@@ -258,8 +300,8 @@ class FileDump:
         dirs = len(self.dup_paths)
         dirdups = sum(map(lambda e: e[1], self.dup_paths))
         print(f"Duplicate dirs [list of {dirs} dirs containing {dirdups} dups]:")
-        for _dir_tuple, cnt in self.dup_paths:
-            dir_tuple = " ".join([unescape(e) for e in _dir_tuple])
+        for escaped_dir_tuple, cnt in self.dup_paths:
+            dir_tuple = " ".join([unescape(e) for e in escaped_dir_tuple])
             print(f"{cnt}: {dir_tuple}")
         print(37 * "\n")
         already = {f for e in self.dup_paths for f in e[0]}
@@ -278,9 +320,41 @@ class FileDump:
             )
         )
         print(f"Entries saving ≥ 2 MiB [list of {len(x)}]:")
-        for _s, hs, k, f in x:
+        for _, hs, k, f in x:
             f = [unescape(e) for e in f]
             print(hs, k, " ".join(f), sep="\t")
+
+    def _completer(self, prompt: str) -> None:
+        """Generate suggested paths from prompt."""
+        parent, child, _ = split_path(prompt + ".")
+        child = child[:-1]
+        # print((parent, child))
+        if parent not in self.graph:
+            self.completer_cache[prompt] = []
+            return
+        l = [parent + e for e, _ in self.graph[parent] if e.startswith(child)]
+        if len(l) == 1:
+            if l[0][-1] not in "\\/" or l[0] not in self.graph:
+                l[0] += " "
+        self.completer_cache[prompt] = l
+
+    def _completer_wrapper(self, text: str, state: int) -> str | None:
+        if text not in self.completer_cache:
+            self._completer(text)
+        cache = self.completer_cache[text]
+        return cache[state] if state < len(cache) else None
+
+    def console(self) -> None:
+        """Open a console to surf through paths."""
+
+        readline.set_completer(self._completer_wrapper)
+        readline.set_completer_delims(" ")
+        readline.parse_and_bind("tab: complete")
+        try:
+            while True:
+                input()
+        except EOFError:
+            pass
 
 
 def escape(t: str) -> str:
@@ -303,24 +377,11 @@ def unescape(t: str) -> str:
     return '"' + re.sub(r"(?<!\^)((\^\^)*)\^s", r"\1 ", t).replace("^^", "^") + '"'
 
 
-# def completer(text, state):
-#     parent, child, sep = split_path(text)
-#     if parent not in graph:
-#         return None
-#     l = [parent + e for e, _ in graph[parent] if e.startswith(child)] + [None]
-#     if len(l) == 2 and l[0][-1] not in "\\/":
-#         l[0] += " "
-#     return l[state]
-
-
 if __name__ == "__main__":
-    fd = FileDump("filedump.txt")
-    fd.print_info()
-    # readline.set_completer(completer)
-    # readline.set_completer_delims(' ')
-    # readline.parse_and_bind('tab: complete')
-    # while True:
-    #     try:
-    #         input()
-    #     except EOFError:
-    #         break
+    fd = FileDump()
+    fd.load_file("filedump.txt")
+    # fd.print_info()
+    if len(sys.argv) > 1:
+        fd.console()
+    else:
+        fd.print_db()
